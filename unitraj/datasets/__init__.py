@@ -1,23 +1,22 @@
-from .MTR_dataset import MTRDataset
-from .autobot_dataset import AutoBotDataset
-from .wayformer_dataset import WayformerDataset
-from .fmae_dataset import FMAEDataset
-from .EMP_dataset import EMPDataset
-from .SMART_dataset import SMARTDataset
+from importlib import import_module
 
+# model name -> (module, class). The class is imported on demand so that one model's optional dependencies
+# (torch_geometric for SMART, natten for Forecast-MAE, ...) are not needed to run another.
 __all__ = {
-    'autobot': AutoBotDataset,
-    'wayformer': WayformerDataset,
-    'MTR': MTRDataset,
-    'forecast': FMAEDataset,
-    'MAE': FMAEDataset,
-    'EMP': EMPDataset,
-    'SMART': SMARTDataset,
+    'autobot': ('.autobot_dataset', 'AutoBotDataset'),
+    'wayformer': ('.wayformer_dataset', 'WayformerDataset'),
+    'MTR': ('.MTR_dataset', 'MTRDataset'),
+    'forecast': ('.fmae_dataset', 'FMAEDataset'),
+    'MAE': ('.fmae_dataset', 'FMAEDataset'),
+    'EMP': ('.EMP_dataset', 'EMPDataset'),
+    'SMART': ('.SMART_dataset', 'SMARTDataset'),
 }
 
 
 def build_dataset(config, val=False):
-    dataset = __all__[config.method.model_name](
+    module_name, class_name = __all__[config.method.model_name]
+    dataset_class = getattr(import_module(module_name, __package__), class_name)
+    dataset = dataset_class(
         config=config, is_validation=val
     )
     return dataset
