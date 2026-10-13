@@ -1,0 +1,15 @@
+# @package _global_
+
+# The lane-connectivity setup on two small disjoint subsets of the Argoverse 2 validation split, for checking
+# that everything runs. Not for results.
+#   python train.py +experiment=lane_connectivity_dev
+
+defaults:
+  - lane_connectivity
+
+study: dev
+train_split: dev_train
+val_split: dev_val
+
+method:
+  max_epochs: 2

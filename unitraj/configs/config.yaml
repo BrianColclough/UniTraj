@@ -1,9 +1,17 @@
 # exp setting
-exp_name: 'test' # name that will be used in wandb
+exp_name: 'test' # name of the run, used for the output directory and in wandb
 ckpt_path: null # checkpoint path, used for evaluation
 seed: 42 # random seed
-debug: True # debug mode, will use cpu only
+debug: True # debug mode, no logging and a single device
 devices: [ 0 ] # gpu ids
+condition: stock # lane-to-lane connectivity: stock (upstream model, no lane-to-lane attention), learned, structured or random
+output_dir: ./unitraj_ckpt/${exp_name} # checkpoints, logs and evaluation results of the run
+logger: [ csv, tensorboard ] # loggers used when debug is False: csv, tensorboard, wandb
+ckpt_monitor: val/brier_fde # validation metric that selects the best checkpoint
+auto_resume: True # continue from <output_dir>/checkpoints/last.ckpt if it exists and ckpt_path is null
+profiler: null # pytorch-lightning profiler, e.g. simple
+shuffle_train: True # reshuffle the training set every epoch
+eval: False # also log metrics split by trajectory type, Kalman difficulty and agent type during validation
 
 # data related
 load_num_workers: 0 # number of workers for loading data
