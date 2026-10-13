@@ -1,10 +1,15 @@
 import os
 
-from setuptools import find_packages, setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from setuptools import find_namespace_packages, setup
+
+# The CUDA extensions are only used by MTR and need a CUDA toolkit that matches the one PyTorch was built with.
+# They are opt-in so that the other models install without a compiler:
+#   UNITRAJ_BUILD_MTR_OPS=1 pip install -e . --no-build-isolation
+BUILD_MTR_OPS = os.environ.get('UNITRAJ_BUILD_MTR_OPS', '0') == '1'
 
 
 def make_cuda_ext(name, module, sources):
+    from torch.utils.cpp_extension import CUDAExtension
     cuda_ext = CUDAExtension(
         name='%s.%s' % (module, name),
         sources=[os.path.join(*module.split('.'), src) for src in sources]
@@ -12,15 +17,9 @@ def make_cuda_ext(name, module, sources):
     return cuda_ext
 
 
-if __name__ == '__main__':
-    setup(
-        name='UniTraj',
-        version=1.0,
-        description='A Unified Framework for Scalable Vehicle Trajectory Prediction',
-        author='Lan Feng',
-        author_email='fenglan18@outlook.com',
-        license='Apache License 2.0',
-        packages=find_packages(exclude=['tools', 'data', 'output']),
+def mtr_ops():
+    from torch.utils.cpp_extension import BuildExtension
+    return dict(
         cmdclass={
             'build_ext': BuildExtension,
         },
@@ -49,4 +48,18 @@ if __name__ == '__main__':
                 ],
             ),
         ],
+    )
+
+
+if __name__ == '__main__':
+    setup(
+        name='UniTraj',
+        version=1.0,
+        description='A Unified Framework for Scalable Vehicle Trajectory Prediction',
+        author='Lan Feng',
+        author_email='fenglan18@outlook.com',
+        license='Apache License 2.0',
+        # unitraj/ has no __init__.py, so it has to be collected as a namespace package
+        packages=find_namespace_packages(include=['unitraj', 'unitraj.*'], exclude=['unitraj.data_samples*']),
+        **(mtr_ops() if BUILD_MTR_OPS else {}),
     )
