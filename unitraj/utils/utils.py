@@ -46,6 +46,19 @@ def set_seed(seed_value=42):
     pl.seed_everything(seed_value, workers=True)
 
 
+def compose_config(overrides=()):
+    """
+    The config train.py would get for these command line overrides, for use outside of a hydra app.
+    """
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+    config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'configs')
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name='config', overrides=list(overrides))
+    OmegaConf.set_struct(cfg, False)
+    return OmegaConf.merge(cfg, cfg.method)
+
+
 def seed_worker(worker_id):
     """
     Seed numpy and random inside a dataloader worker.

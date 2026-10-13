@@ -15,7 +15,11 @@ debug: False
 # everything large lives outside the repository
 data_root: ${oc.env:LANE_CONNECTIVITY_DATA,${oc.env:HOME}/data/lane-connectivity}
 output_dir: ${data_root}/runs/${study}/${exp_name}
-cache_path: ${data_root}/cache
+# The preprocessed cache is only keyed by the dataset path and does not notice changed settings. Use a new tag
+# (or pass overwrite_cache=True once) after changing anything that affects preprocessing: past_len, future_len,
+# starting_frame, line_type, object_type, map_range, max_num_roads, max_points_per_lane, max_num_agents, ...
+cache_tag: v1
+cache_path: ${data_root}/cache/${cache_tag}
 train_split: train
 val_split: val
 train_data_path: [ "${data_root}/scenarionet/${train_split}/av2" ]
