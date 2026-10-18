@@ -22,6 +22,10 @@ default_value = 0
 object_type = defaultdict(lambda: default_value, object_type)
 polyline_type = defaultdict(lambda: default_value, polyline_type)
 
+# bits of map_polylines_adjacency, one per relation the map records between two lanes: bit LANE_AFTER of entry
+# [i, j] is set when the lane of token j comes after the lane of token i, and so on
+LANE_AFTER, LANE_BEFORE, LANE_LEFT, LANE_RIGHT = 1, 2, 4, 8
+
 
 class BaseDataset(Dataset):
 
@@ -217,6 +221,7 @@ class BaseDataset(Dataset):
                 cur_info['speed_limit_mph'] = v.get('speed_limit_mph', None)
                 cur_info['interpolating'] = v.get('interpolating', None)
                 cur_info['entry_lanes'] = v.get('entry_lanes', None)
+                cur_info['exit_lanes'] = v.get('exit_lanes', None)
                 try:
                     cur_info['left_boundary'] = [{
                         'start_index': x['self_start_index'], 'end_index': x['self_end_index'],
@@ -414,11 +419,13 @@ class BaseDataset(Dataset):
         else:
             map_polylines_data, map_polylines_mask, map_polylines_center, map_polylines_lane_id = self.get_map_data(
                 center_objects=center_objects, map_infos=info['map_infos'])
+        map_polylines_adjacency = self.get_lane_adjacency(map_polylines_lane_id, info['map_infos']['lane'])
 
         ret_dict['map_polylines'] = map_polylines_data
         ret_dict['map_polylines_mask'] = map_polylines_mask.astype(bool)
         ret_dict['map_polylines_center'] = map_polylines_center
         ret_dict['map_polylines_lane_id'] = map_polylines_lane_id
+        ret_dict['map_polylines_adjacency'] = map_polylines_adjacency
 
         # masking out unused attributes to Zero
         masked_attributes = self.config['masked_attributes']
@@ -830,6 +837,45 @@ class BaseDataset(Dataset):
         map_polylines[map_polylines_mask == 0] = 0
 
         return map_polylines, map_polylines_mask, map_polylines_center, map_polylines_lane_id
+
+    def get_lane_adjacency(self, map_polylines_lane_id, lane_infos):
+        """
+        Args:
+            map_polylines_lane_id (num_center_objects, num_polylines): lane ID of each map token, -1 where the slot
+                holds no lane
+            lane_infos: map_infos['lane'], every lane of the scenario with its entry and exit lanes
+        Returns:
+            map_polylines_adjacency (num_center_objects, num_polylines, num_polylines): uint8, the LANE_* bits of how
+                the lane of token j relates to the lane of token i. Only lanes that give a token are linked, tokens of
+                the same lane are not linked to each other, and the diagonal and empty slots stay 0. LANE_LEFT and
+                LANE_RIGHT are not set yet: this function reads only entry_lanes and exit_lanes.
+        """
+        # (lane, lane after it), read from both lanes' lists so a link listed on one side only still counts
+        successors = set()
+        for lane in lane_infos:
+            lane_id = int(lane['id'])
+            exit_lanes, entry_lanes = lane['exit_lanes'], lane['entry_lanes']
+            for next_id in [] if exit_lanes is None else exit_lanes:
+                successors.add((lane_id, int(next_id)))
+            for prev_id in [] if entry_lanes is None else entry_lanes:
+                successors.add((int(prev_id), lane_id))
+
+        num_center_objects, num_polylines = map_polylines_lane_id.shape
+        adjacency = np.zeros((num_center_objects, num_polylines, num_polylines), dtype=np.uint8)
+        for obj_idx in range(num_center_objects):
+            # a lane that leaves the map range and comes back gives more than one token
+            lane_tokens = defaultdict(list)
+            for slot, lane_id in enumerate(map_polylines_lane_id[obj_idx].tolist()):
+                if lane_id >= 0:
+                    lane_tokens[lane_id].append(slot)
+            for lane_id, next_id in successors:
+                if lane_id == next_id or lane_id not in lane_tokens or next_id not in lane_tokens:
+                    continue
+                for i in lane_tokens[lane_id]:
+                    for j in lane_tokens[next_id]:
+                        adjacency[obj_idx, i, j] |= LANE_AFTER
+                        adjacency[obj_idx, j, i] |= LANE_BEFORE
+        return adjacency
 
     def get_manually_split_map_data(self, center_objects, map_infos):
         """
