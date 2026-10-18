@@ -409,13 +409,16 @@ class BaseDataset(Dataset):
         if self.config.manually_split_lane:
             map_polylines_data, map_polylines_mask, map_polylines_center = self.get_manually_split_map_data(
                 center_objects=center_objects, map_infos=info['map_infos'])
+            # pieces cut to a fixed length are not traced back to their lane
+            map_polylines_lane_id = np.full(map_polylines_mask.shape[:2], -1, dtype=np.int64)
         else:
-            map_polylines_data, map_polylines_mask, map_polylines_center = self.get_map_data(
+            map_polylines_data, map_polylines_mask, map_polylines_center, map_polylines_lane_id = self.get_map_data(
                 center_objects=center_objects, map_infos=info['map_infos'])
 
         ret_dict['map_polylines'] = map_polylines_data
         ret_dict['map_polylines_mask'] = map_polylines_mask.astype(bool)
         ret_dict['map_polylines_center'] = map_polylines_center
+        ret_dict['map_polylines_lane_id'] = map_polylines_lane_id
 
         # masking out unused attributes to Zero
         masked_attributes = self.config['masked_attributes']
@@ -736,6 +739,7 @@ class BaseDataset(Dataset):
         num_agents = all_polylines.shape[0]
         polyline_list = []
         polyline_mask_list = []
+        polyline_lane_id_list = []
 
         for k, v in map_infos.items():
             if k == 'all_polylines' or k not in line_type:
@@ -774,16 +778,22 @@ class BaseDataset(Dataset):
 
                 polyline_list.append(segment_list)
                 polyline_mask_list.append(segment_mask_list)
+                # map feature ID of every segment cut from a lane, -1 for anything that is not a lane
+                lane_id = int(polyline_dict['id']) if k == 'lane' else -1
+                polyline_lane_id_list.append(np.full(max_segments, lane_id, dtype=np.int64))
+        # two values: the caller's unpack fails, so a scenario with no polyline of the chosen types is dropped
         if len(polyline_list) == 0: return np.zeros((num_agents, 0, max_points_per_lane, 7)), np.zeros(
             (num_agents, 0, max_points_per_lane))
         batch_polylines = np.concatenate(polyline_list, axis=1)
         batch_polylines_mask = np.concatenate(polyline_mask_list, axis=1)
+        batch_lane_ids = np.concatenate(polyline_lane_id_list)
 
         polyline_xy_offsetted = batch_polylines[:, :, :, 0:2] - np.reshape(center_offset, (1, 1, 1, 2))
         polyline_center_dist = np.linalg.norm(polyline_xy_offsetted, axis=-1).sum(-1) / np.clip(
             batch_polylines_mask.sum(axis=-1).astype(float), a_min=1.0, a_max=None)
         polyline_center_dist[batch_polylines_mask.sum(-1) == 0] = 1e10
         topk_idxs = np.argsort(polyline_center_dist, axis=-1)[:, :num_of_src_polylines]
+        map_polylines_lane_id = batch_lane_ids[topk_idxs]
 
         # Ensure topk_idxs has the correct shape for indexing
         topk_idxs = np.expand_dims(topk_idxs, axis=-1)
@@ -796,6 +806,11 @@ class BaseDataset(Dataset):
                                ((0, 0), (0, num_of_src_polylines - map_polylines.shape[1]), (0, 0), (0, 0)))
         map_polylines_mask = np.pad(map_polylines_mask,
                                     ((0, 0), (0, num_of_src_polylines - map_polylines_mask.shape[1]), (0, 0)))
+        map_polylines_lane_id = np.pad(map_polylines_lane_id,
+                                       ((0, 0), (0, num_of_src_polylines - map_polylines_lane_id.shape[1])),
+                                       constant_values=-1)
+        # a lane in range for one agent leaves empty slots for the others, which must not carry its ID
+        map_polylines_lane_id[map_polylines_mask.sum(-1) == 0] = -1
 
         temp_sum = (map_polylines[:, :, :, 0:3] * map_polylines_mask[:, :, :, None].astype(float)).sum(
             axis=-2)  # (num_center_objects, num_polylines, 3)
@@ -814,7 +829,7 @@ class BaseDataset(Dataset):
         map_polylines = np.concatenate((map_polylines, xy_pos_pre, map_types), axis=-1)
         map_polylines[map_polylines_mask == 0] = 0
 
-        return map_polylines, map_polylines_mask, map_polylines_center
+        return map_polylines, map_polylines_mask, map_polylines_center, map_polylines_lane_id
 
     def get_manually_split_map_data(self, center_objects, map_infos):
         """
