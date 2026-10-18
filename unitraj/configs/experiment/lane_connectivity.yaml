@@ -18,7 +18,7 @@ output_dir: ${data_root}/runs/${study}/${exp_name}
 # The preprocessed cache is only keyed by the dataset path and does not notice changed settings. Use a new tag
 # (or pass overwrite_cache=True once) after changing anything that affects preprocessing: past_len, future_len,
 # starting_frame, line_type, object_type, map_range, max_num_roads, max_points_per_lane, max_num_agents, ...
-cache_tag: v1
+cache_tag: v2 # lanes only, with each token's lane ID and the lane adjacency
 cache_path: ${data_root}/cache/${cache_tag}
 train_split: train
 val_split: val
@@ -30,6 +30,9 @@ load_num_workers: 8
 past_len: 50
 future_len: 60
 starting_frame: [ 0 ]
+
+# the map input is lane centerlines only, so every map token is a node of the lane graph (Decision 2)
+line_type: [ 'lane' ]
 
 eval: True # log the trajectory type and Kalman difficulty splits at every validation epoch
 
