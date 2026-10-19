@@ -5,6 +5,9 @@ seed: 42 # random seed
 debug: True # debug mode, no logging and a single device
 devices: [ 0 ] # gpu ids
 condition: stock # lane-to-lane connectivity: stock (upstream model, no lane-to-lane attention), learned, structured or random
+lane_hops: 3 # structured and random: a lane may attend to the lanes within this many links of it (Decision 3)
+lane_relations: [ after, before ] # map relations that count as a link (Decision 1); left and right are not in the cache yet
+rewire_swaps_per_link: 10 # random: successful double-edge swaps per link of the structured graph (Decision 4)
 output_dir: ./unitraj_ckpt/${exp_name} # checkpoints, logs and evaluation results of the run
 logger: [ csv, tensorboard ] # loggers used when debug is False: csv, tensorboard, wandb
 ckpt_monitor: val/brier_fde # validation metric that selects the best checkpoint

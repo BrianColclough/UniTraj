@@ -14,6 +14,7 @@ from tqdm import tqdm
 from unitraj.datasets import common_utils
 from unitraj.datasets.common_utils import get_polyline_dir, find_true_segments, generate_mask, is_ddp, \
     get_kalman_difficulty, get_trajectory_type, interpolate_polyline
+from unitraj.datasets.lane_attn_mask import build_lane_attn_mask, mask_seed
 from unitraj.datasets.types import object_type, polyline_type
 from unitraj.utils.visualization import check_loaded_data
 from functools import lru_cache
@@ -25,6 +26,8 @@ polyline_type = defaultdict(lambda: default_value, polyline_type)
 # bits of map_polylines_adjacency, one per relation the map records between two lanes: bit LANE_AFTER of entry
 # [i, j] is set when the lane of token j comes after the lane of token i, and so on
 LANE_AFTER, LANE_BEFORE, LANE_LEFT, LANE_RIGHT = 1, 2, 4, 8
+# the names lane_relations in the config uses for them
+LANE_RELATIONS = {'after': LANE_AFTER, 'before': LANE_BEFORE, 'left': LANE_LEFT, 'right': LANE_RIGHT}
 
 
 class BaseDataset(Dataset):
@@ -38,6 +41,22 @@ class BaseDataset(Dataset):
         self.config = config
         self.data_loaded_memory = []
         self.file_cache = {}
+        self.condition = config.get('condition', 'stock')
+        if self.condition != 'stock':
+            relations = list(config['lane_relations'])
+            if not relations or set(relations) - set(LANE_RELATIONS):
+                raise ValueError(f'lane_relations {relations}: expected some of {list(LANE_RELATIONS)}')
+            if {'left', 'right'} & set(relations):
+                # get_lane_adjacency() does not set LANE_LEFT or LANE_RIGHT yet, so they would silently add nothing
+                raise NotImplementedError('left and right links are not in the cache yet, use lane_relations '
+                                          '[after, before] (Decision 1)')
+            if config['lane_hops'] < 0 or config['rewire_swaps_per_link'] < 1:
+                raise ValueError('lane_hops must be at least 0 and rewire_swaps_per_link at least 1')
+            if list(config['line_type']) != ['lane'] or config['manually_split_lane']:
+                # a map token with no lane ID gets no partner in any mask, so in every version it would attend only
+                # to itself (Decision 2: lanes only)
+                raise ValueError(f'condition={self.condition} needs line_type [lane] and manually_split_lane False')
+            self.relation_bits = sum(LANE_RELATIONS[r] for r in relations)
         self.load_data()
 
     def load_data(self):
@@ -517,6 +536,18 @@ class BaseDataset(Dataset):
 
         group = self.file_cache[file_path][file_key]
         record = {k: group[k][()].decode('utf-8') if group[k].dtype.type == np.bytes_ else group[k][()] for k in group.keys()}
+
+        if self.condition != 'stock':
+            # Built here, not cached: it depends on the condition and the training seed, and the same sample always
+            # gives the same mask, so a random graph is fixed for the whole run, validation included (Decision 4)
+            record['lane_attn_mask'], info = build_lane_attn_mask(
+                record['map_polylines_lane_id'], record['map_polylines_adjacency'], self.condition,
+                hops=self.config['lane_hops'], relation_bits=self.relation_bits,
+                swaps_per_link=self.config['rewire_swaps_per_link'],
+                seed=mask_seed(record['scenario_id'], record['center_objects_id'], self.config['seed']))
+            if info is not None:
+                # False where random fell short of its swap target, logged as lane_mask_not_rewired
+                record['lane_mask_rewired'] = info['status'] == 'ok'
 
         return record
 

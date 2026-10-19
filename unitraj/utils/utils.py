@@ -104,7 +104,3 @@ def build_loggers(cfg):
 def check_condition(cfg):
     if cfg.condition not in CONDITIONS:
         raise ValueError(f'Unknown condition {cfg.condition}, expected one of {CONDITIONS}')
-    if cfg.condition in ('structured', 'random'):
-        # TODO: build the lane-to-lane attention mask for this condition
-        print(f'Warning: the mask for condition={cfg.condition} is not implemented yet, '
-              f'this run uses the lane-to-lane attention layer with no mask, as in condition=learned')

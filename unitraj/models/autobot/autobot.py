@@ -319,6 +319,31 @@ class AutoBotEgo(BaseModel):
         attn_mask = (~allowed).repeat_interleave(self.num_heads, dim=0)  # (B * num_heads, S, S), True blocks the pair
         return self.lane_attn_layer(map_features, src_mask=attn_mask)
 
+    def lane_mask_settings(self):
+        # the settings that decide this version's mask; learned, structured and random have the same weights, so only
+        # these tell their checkpoints apart
+        settings = {'condition': self.condition}
+        if self.condition in ('structured', 'random'):
+            settings.update(lane_hops=int(self.config['lane_hops']),
+                            lane_relations=sorted(str(r) for r in self.config['lane_relations']))
+        if self.condition == 'random':
+            # the random graphs are drawn from the training seed
+            settings.update(rewire_swaps_per_link=int(self.config['rewire_swaps_per_link']),
+                            seed=int(self.config['seed']))
+        return settings
+
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint['lane_mask_settings'] = self.lane_mask_settings()
+
+    def on_load_checkpoint(self, checkpoint):
+        saved = checkpoint.get('lane_mask_settings')
+        if saved is None and self.condition == 'stock':
+            return  # a stock checkpoint from before the settings were saved
+        if saved != self.lane_mask_settings():
+            raise ValueError(f'The checkpoint was trained with lane mask settings {saved} but this run has '
+                             f'{self.lane_mask_settings()}. Evaluate or resume it with the settings it was trained '
+                             f'with (None: trained before the mask builder, with no mask).')
+
     def _forward(self, inputs):
         '''
         :param ego_in: [B, T_obs, k_attr+1] with last values being the existence mask.
@@ -348,7 +373,7 @@ class AutoBotEgo(BaseModel):
         orig_map_features, orig_road_segs_masks = self.map_encoder(roads, ego_soctemp_emb)
         if self.condition != 'stock':
             orig_map_features = self.lane_attn_fn(orig_map_features, orig_road_segs_masks,
-                                                  inputs.get('lane_attn_mask'))
+                                                  inputs['lane_attn_mask'])
         map_features = orig_map_features.unsqueeze(2).repeat(1, 1, self.c, 1).view(-1, B * self.c, self.d_k)
         road_segs_masks = orig_road_segs_masks.unsqueeze(1).repeat(1, self.c, 1).view(B * self.c, -1)
 
@@ -400,7 +425,8 @@ class AutoBotEgo(BaseModel):
         model_input['ego_in'] = ego_in
         model_input['agents_in'] = agents_in
         model_input['roads'] = roads
-        model_input['lane_attn_mask'] = inputs.get('lane_attn_mask')
+        # the dataset builds a mask for every version with the layer, so a missing one is an error, not every pair
+        model_input['lane_attn_mask'] = inputs['lane_attn_mask'] if self.condition != 'stock' else None
         output = self._forward(model_input)
         loss = self.get_loss(batch, output)
         # if self.training:

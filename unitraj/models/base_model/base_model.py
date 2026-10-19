@@ -277,6 +277,10 @@ class BaseModel(pl.LightningModule):
         loss_dict.update(new_dict)
         # loss_dict.update(avg_dict)
 
+        if 'lane_mask_rewired' in inputs:
+            # random version: share of samples whose graph fell short of its swap target (Decision 4)
+            loss_dict['lane_mask_not_rewired'] = (~inputs['lane_mask_rewired']).float().cpu().numpy()
+
         if status == 'val' and self.config.get('eval', False):
 
             # Split scores based on trajectory type
