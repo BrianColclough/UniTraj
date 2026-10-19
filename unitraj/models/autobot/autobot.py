@@ -10,6 +10,7 @@ from torch.distributions import MultivariateNormal, Laplace
 from torch.optim.lr_scheduler import MultiStepLR
 
 from unitraj.models.base_model.base_model import BaseModel
+from unitraj.utils.utils import CONDITIONS
 
 
 class MapEncoderCNN(nn.Module):
@@ -239,6 +240,18 @@ class AutoBotEgo(BaseModel):
         self.fisher_information = None
         self.optimal_params = None
 
+        # ============================== LANE-TO-LANE ATTENTION ==============================
+        # One self-attention layer over the map tokens, the same in the learned, structured and random versions; only
+        # its attention mask differs. The stock model has no such layer. Built last so every module above starts from
+        # the same weights as in the stock model for the same seed.
+        self.condition = config['condition']
+        if self.condition not in CONDITIONS:
+            raise ValueError(f'Unknown condition {self.condition}, expected one of {CONDITIONS}')
+        if self.condition != 'stock':
+            self.lane_attn_layer = nn.TransformerEncoderLayer(d_model=self.d_k, nhead=self.num_heads,
+                                                              dropout=self.dropout,
+                                                              dim_feedforward=self.tx_hidden_size)
+
     def generate_decoder_mask(self, seq_len, device):
         ''' For masking out the subsequent info. '''
         subsequent_mask = (torch.triu(torch.ones((seq_len, seq_len), device=device), diagonal=1)).bool()
@@ -289,6 +302,23 @@ class AutoBotEgo(BaseModel):
         agents_soc_emb = agents_soc_emb.view(num_agents, B, T_obs, -1).permute(2, 1, 0, 3)
         return agents_soc_emb
 
+    def lane_attn_fn(self, map_features, road_segs_masks, lane_attn_mask):
+        '''
+        :param map_features: (S, B, H) one token per map polyline
+        :param road_segs_masks: (B, S) True where the slot is empty
+        :param lane_attn_mask: (B, S, S) True where token i may attend to token j, None to allow every pair
+        :return: (S, B, H)
+        '''
+        B, S = road_segs_masks.shape
+        allowed = ~road_segs_masks.unsqueeze(1).expand(B, S, S)  # no token attends to an empty slot
+        if lane_attn_mask is not None:
+            allowed = allowed & lane_attn_mask
+        # every token attends to itself, so no row is fully blocked: a lane with no partner, or an empty slot, would
+        # otherwise give NaN
+        allowed = allowed | torch.eye(S, dtype=torch.bool, device=allowed.device)
+        attn_mask = (~allowed).repeat_interleave(self.num_heads, dim=0)  # (B * num_heads, S, S), True blocks the pair
+        return self.lane_attn_layer(map_features, src_mask=attn_mask)
+
     def _forward(self, inputs):
         '''
         :param ego_in: [B, T_obs, k_attr+1] with last values being the existence mask.
@@ -316,6 +346,9 @@ class AutoBotEgo(BaseModel):
         ego_soctemp_emb = agents_emb[:, :, 0]  # take ego-agent encodings only.
 
         orig_map_features, orig_road_segs_masks = self.map_encoder(roads, ego_soctemp_emb)
+        if self.condition != 'stock':
+            orig_map_features = self.lane_attn_fn(orig_map_features, orig_road_segs_masks,
+                                                  inputs.get('lane_attn_mask'))
         map_features = orig_map_features.unsqueeze(2).repeat(1, 1, self.c, 1).view(-1, B * self.c, self.d_k)
         road_segs_masks = orig_road_segs_masks.unsqueeze(1).repeat(1, self.c, 1).view(B * self.c, -1)
 
@@ -367,6 +400,7 @@ class AutoBotEgo(BaseModel):
         model_input['ego_in'] = ego_in
         model_input['agents_in'] = agents_in
         model_input['roads'] = roads
+        model_input['lane_attn_mask'] = inputs.get('lane_attn_mask')
         output = self._forward(model_input)
         loss = self.get_loss(batch, output)
         # if self.training:
